@@ -1,0 +1,146 @@
+Bu repo, RNN (Recurrent Neural Network) ve “zaman boyunca geriye yayılım” (BPTT) konusunu iki şekilde öğretiyor:
+
+- Q1: Numpy ile “sıfırdan” basit RNN + lineer katman yazıp, forward/backward ve gradient clipping mantığını görüyorsun.
+- Q2: Aynı fikirleri PyTorch ile (kendi BasicRNN ve kendi LSTM hücren) kurup, iki oyuncağı görevde eğitiyorsun: sinüs devam ettirme ve “hafıza/memorization” görevi.
+
+**1) Q1 (q1_bptt_for_torch) — Numpy ile RNN + BPTT**
+
+Dosyalar:
+- RNN hücresi: q1_bptt_for_torch/BasicRNNCell.py
+- Çıkış katmanı: q1_bptt_for_torch/LinearLayer.py
+- Softmax + cross entropy + clipping: q1_bptt_for_torch/common.py
+- Veri üretimi: q1_bptt_for_torch/data_generator.py
+- Çalıştırma: q1_bptt_for_torch/main.py
+- Gradient check / testler: q1_bptt_for_torch/test.py
+- Training döngüsü: q1_bptt_for_torch/train.py
+
+### 1a) Forward propagation (RNN’in ileri geçişi) ne?
+Bir diziyi (sequence) karakter karakter işleriz. Her adımda bir “gizli durum” (hidden state) güncellenir:
+
+h_t = ReLU(W_hx x_t + W_hh h_{t-1} + b)
+
+- x_t: o anki giriş (one-hot karakter vektörü)
+- h_t: RNN’in hafızası gibi düşünebilirsin (o ana kadar gördüklerini özetler)
+- ReLU: negatifleri sıfırlar
+
+Kod karşılığı: q1_bptt_for_torch/BasicRNNCell.py içindeki fprop.
+Bu dosyada self.xs (girişleri) ve self.hs (hidden state’leri) saklanıyor; çünkü backward yaparken geçmişe dönüp bunları kullanacağız.
+
+### 1b) BPTT (Backprop Through Time) ne demek?
+Normal backprop’ta ağın katmanları boyunca geriye gidersin.
+RNN’de ek olarak “zaman adımları” boyunca da geriye gidersin: son adımın hatası, bir önceki adımı da etkiler, o da bir öncekini…
+
+Mantık:
+- En sondan başlayıp dy_t hatasını alırsın.
+- Bu hata, W_hh üzerinden bir önceki hidden state’e de akar.
+- ReLU kullandığın için, ReLU’nun sıfırladığı yerlerde gradient “kesilir” (0 olur).
+
+Kod karşılığı: q1_bptt_for_torch/BasicRNNCell.py içindeki bprop.
+Orada kabaca:
+- dh = W_hh^T * dh + dy birikimi var (zaman boyunca hatayı topluyor).
+- Sonra dW_hh, dW_hx, dbh biriktiriliyor.
+
+### Gradient checking (Doğru türev aldık mı?)
+q1_bptt_for_torch/test.py içindeki run_check_grads şunu yapıyor:
+- Ağı bir kere çalıştırıp analitik gradient’leri alıyor (backprop ile).
+- Sonra tek bir parametreyi çok küçük delta kadar oynatıp loss farkından sayısal türev hesaplıyor:
+  (L(theta+delta)-L(theta-delta)) / (2*delta)
+- İkisini karşılaştırıyor. Yakınsa: “backprop doğru”.
+
+Bu, özellikle BPTT yazarken “benim türevim doğru mu?” sorusunun en pratik cevabı.
+
+### 1c/1d) Exploding gradient nedir, clipping niye var?
+Uzun sequence’lerde (1000 adım gibi) W_hh tekrar tekrar çarpıldığı için gradient norm’u aşırı büyüyebilir. Buna “exploding gradients” denir.
+
+Çözüm (en basitlerinden biri): gradient clipping.
+q1_bptt_for_torch/common.py içindeki clip_gradient şunu yapıyor:
+- Eğer ||g|| > T ise gradient’i ölçekleyip norm’u T yapıyor.
+
+Bu sayede güncelleme “kontrolden çıkmıyor”.
+
+Exploding’i görselleştirme: q1_bptt_for_torch/test.py içindeki run_exploding_grads_test farklı sequence uzunluklarında gradient büyüklüğünü plot ediyor.
+
+### 1e/1f) Memorization task (hafıza görevi) ne?
+q1_bptt_for_torch/data_generator.py içindeki generate_data_memory şu tip bir input üretir:
+
+- İlk kısım: hatırlanacak rastgele karakterler
+- Sonra bir delimiter (ayraç)
+- Sonra boşluk/blanks
+Ama label (ground truth) şunu ister:
+- İlk kısımda boşluk,
+- Delimiter sonrası kısımda ise baştaki karakterleri aynen geri üret.
+
+Bu görev şunu ölçer: “RNN uzun süre bilgi tutabiliyor mu?”
+
+W_hh’yi identity ile başlatma fikri (1f): q1_bptt_for_torch/BasicRNNCell.py
+- Amaç: başlangıçta hidden state “çok bozulmadan” taşınabilsin (çok kaba bir sezgi: “hafıza korunsun”).
+- Bu tek başına mucize değil, ama eğitime yardımcı olabilir.
+
+**2) Q2 (q2_rnn_torch) — PyTorch ile BasicRNN ve LSTM**
+
+Dosyalar:
+- Arayüz: q2_rnn_torch/AbstractRNNCell.py
+- Basic RNN hücresi: q2_rnn_torch/BasicRNNCell.py
+- Kendi LSTM’in: q2_rnn_torch/MyLSTMCell.py
+- RNN + linear çıkış: q2_rnn_torch/RNNPlusLinearLayer.py
+- Eğitim/test döngüsü: q2_rnn_torch/loops.py
+- Sinüs dataset: q2_rnn_torch/SineDataset.py
+- Hafıza dataset: q2_rnn_torch/CharSequenceDataset.py
+- Hafıza loss/acc: q2_rnn_torch/memory_task.py
+- Çalıştırma: q2_rnn_torch/main.py
+
+### Task 1: Sinüs devam ettirme (regression)
+Amaç: “Sonraki sinüs örneğini tahmin et”.
+- Dataset: her örnek bir sinüs eğrisi, hedef “1 adım kaydırılmış” versiyonu. (q2_rnn_torch/SineDataset.py)
+- Loss: MSE (torch.nn.MSELoss), yani ortalama kare hata.
+- Model: RNN (BasicRNN veya LSTM) + linear layer (q2_rnn_torch/RNNPlusLinearLayer.py)
+
+Testte bootstrapping var: önce birkaç gerçek sample ile hidden state’i “ısıtıyor”, sonra modelin kendi çıktısını tekrar giriş yapıp geleceği ürettiriyor. (q2_rnn_torch/loops.py)
+
+### Task 2: Memorization task (classification)
+Burada çıktı “hangi karakter?” sorusu: sınıflandırma.
+- Input one-hot: şekil [B, L, C]
+- Ground truth index: şekil [B, L] (her timestep için doğru sınıf id)
+- Loss: Cross entropy. (q2_rnn_torch/memory_task.py)
+  - Sadece son to_remember_len karakterde loss hesaplıyor, çünkü asıl “cevap” o kısımda.
+- Accuracy de aynı şekilde sadece son kısımda ölçülüyor.
+
+### LSTM neden daha iyi “hatırlar”?
+Basic RNN’de hidden state her adımda tek bir dönüşümle güncellenir. Uzun dizilerde bilgi kaybolabilir veya gradient patlayabilir/sönebilir.
+LSTM’de kapılar (gates) var:
+- f (forget): neyi unutayım?
+- i (input): neyi yazayım?
+- o (output): neyi dışarı çıkarayım?
+- Hücre durumu c_t ayrı bir “uzun vadeli hafıza kanalı” gibi çalışır.
+
+Kod karşılığı: q2_rnn_torch/MyLSTMCell.py içindeki denklemler.
+
+### Eğitim döngüsünde (train_loop) neler oluyor?
+q2_rnn_torch/loops.py içindeki train_loop şeması klasik:
+1) optimizer.zero_grad()
+2) outputs = model(input)
+3) loss = loss_func(outputs, ground_truth)
+4) loss.backward()
+5) gradient clipping: clip_grad_norm_(..., 5.0)
+6) optimizer.step()
+
+Bu PyTorch tarafındaki “BPTT”nin otomatik yaptığı şey: sequence boyunca geriye doğru türevleri kendi hesaplıyor.
+
+**Çalıştırma (pratik komut örnekleri)**
+- Q1:
+  - Gradient check: python q1_bptt_for_torch/main.py --task 1
+  - Exploding gradients: python q1_bptt_for_torch/main.py --task 2
+  - Memory task: python q1_bptt_for_torch/main.py --task 3 --nbr_iters 70000 --lr 0.001
+- Q2:
+  - Sinüs (BasicRNN): python q2_rnn_torch/main.py --task 1 --rnn_type BasicRNN
+  - Sinüs (LSTM): python q2_rnn_torch/main.py --task 1 --rnn_type LSTM
+  - Memory (BasicRNN): python q2_rnn_torch/main.py --task 2 --rnn_type BasicRNN
+  - Memory (LSTM): python q2_rnn_torch/main.py --task 2 --rnn_type LSTM
+
+**Mini soru-cevap (öğrenmeyi sağlamlaştırmak için)**
+1) Neden one-hot kullanıyoruz? (Cevap: modelin “hangi karakter” bilgisini sayısal ve ayrık şekilde alması için; her sınıf ayrı boyut.)
+2) Neden softmax + cross entropy birlikte? (Cevap: softmax skorları olasılığa çevirir; cross entropy doğru sınıfı yüksek olasılığa zorlar.)
+3) Exploding gradient’in kök sebebi ne? (Cevap: zaman boyunca tekrar eden matris çarpımları norm’u büyütebilir.)
+4) LSTM’de “cell state” ne işe yarar? (Cevap: bilgiyi daha uzun süre taşıyabilen ayrı bir kanal.)
+
+İstersen şu şekilde ilerleyelim: Q1’de önce fprop ve bprop’u “tek bir örnek sequence” üstünden elle takip edelim (boyutlarla birlikte). Hangi kısım daha zor geliyor: (1) BPTT’de dh’nin birikmesi mi, (2) loss/softmax mı, (3) memory task’ın veri düzeni mi?
